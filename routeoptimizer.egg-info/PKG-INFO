@@ -1,0 +1,116 @@
+Metadata-Version: 2.4
+Name: routeoptimizer
+Version: 0.1.0
+Summary: Dynamic delivery routing with ETA prediction and OR-Tools
+Author: routeOptimizer team
+License: MIT
+Requires-Python: >=3.10
+Description-Content-Type: text/markdown
+Requires-Dist: numpy==1.26.4
+Requires-Dist: pandas==2.2.2
+Requires-Dist: scikit-learn==1.5.1
+Requires-Dist: lightgbm==4.5.0
+Requires-Dist: ortools==9.10.4067
+Requires-Dist: fastapi==0.115.0
+Requires-Dist: uvicorn==0.30.6
+Requires-Dist: streamlit==1.38.0
+Requires-Dist: mlflow==2.16.2
+Requires-Dist: dvc==3.56.0
+Requires-Dist: hydra-core==1.3.2
+Requires-Dist: pyyaml==6.0.2
+Requires-Dist: osmnx==1.9.4
+Requires-Dist: geopandas==0.14.4
+Requires-Dist: folium==0.17.0
+Requires-Dist: joblib==1.4.2
+Requires-Dist: python-multipart==0.0.9
+Provides-Extra: dev
+Requires-Dist: pytest==8.3.3; extra == "dev"
+Requires-Dist: pytest-cov==5.0.0; extra == "dev"
+Requires-Dist: ruff==0.6.5; extra == "dev"
+Requires-Dist: mypy==1.11.2; extra == "dev"
+
+# routeOptimizer
+
+CPU-only проект для динамической маршрутизации доставки с прогнозом ETA (LightGBM) и оптимизацией VRPTW (OR-Tools).
+
+## Архитектура
+
+- `src/data/`: генерация/подготовка исходных данных.
+- `src/features/`: построение признаков для ETA-модели.
+- `src/models/`: обучение и сохранение ETA-модели.
+- `src/optimization/`: расчет матрицы времени и решение VRPTW.
+- `src/api/`: FastAPI слой для инференса и оптимизации.
+- `src/ui/`: Streamlit UI для демо и визуализации маршрутов.
+- `configs/`: конфиги обучения и путей.
+- `data/`: сырые и обработанные датасеты.
+- `models/`: сериализованные модели и feature-конфиги.
+
+## Структура проекта
+
+```text
+routeOptimizer/
+├── data/raw/          # trips.csv, orders.csv
+├── data/processed/    # features, splits
+├── models/            # eta_lgbm.pkl, feature_config.json
+├── src/data/          # generate_data.py, preprocessing.py
+├── src/features/      # engineering.py
+├── src/models/        # train_eta.py
+├── src/optimization/  # solver.py
+├── src/api/           # main.py
+├── src/ui/            # app.py
+├── tests/             # test_*.py
+├── configs/           # train.yaml
+├── Makefile
+└── README.md
+```
+
+## Требования
+
+- Python 3.10+
+- CPU-only окружение
+- `make` (GNU Make)
+
+## Установка зависимостей
+
+```bash
+pip install --upgrade pip
+pip install -e .[dev]
+```
+
+Или через make:
+
+```bash
+make setup
+```
+
+## Базовые команды
+
+- `make setup` — установить зависимости проекта.
+- `make train` — запустить обучение ETA-модели (будет реализовано в следующих фазах).
+- `make serve` — запустить FastAPI API (будет реализовано в следующих фазах).
+- `make demo` — запустить Streamlit UI (будет реализовано в следующих фазах).
+- `make test` — запустить тесты.
+- `make clean` — очистить кэш/артефакты и подготовить пустые `data/processed`, `models`.
+
+## Конфиг обучения
+
+Основной конфиг: `configs/train.yaml`
+
+- `n_jobs: 6`
+- `lightgbm.device: cpu`
+- пути данных/моделей/MLflow артефактов
+- seed и гиперпараметры модели
+
+## Чеклист готовности
+
+- [x] Создана структура директорий.
+- [x] Добавлен `pyproject.toml` с фиксированными версиями зависимостей.
+- [x] Добавлен `Makefile` с базовыми командами.
+- [x] Добавлен `configs/train.yaml` для CPU-only обучения.
+- [x] Добавлен стартовый набор тестов-заглушек.
+- [ ] Реализована генерация данных.
+- [ ] Реализован feature engineering.
+- [ ] Реализовано обучение модели и логирование в MLflow.
+- [ ] Реализован OR-Tools solver.
+- [ ] Реализованы API и UI.
+- [ ] Добавлен DVC pipeline и финальная MLOps-обвязка.

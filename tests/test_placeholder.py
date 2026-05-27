@@ -1,4 +1,4 @@
-"""Placeholder tests for Phase 1 bootstrap."""
+"""Tests for Phase 1 bootstrap"""
 
 
 def test_project_bootstrap_placeholder() -> None:
