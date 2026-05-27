@@ -1,0 +1,34 @@
+# virtual envs
+venv/
+.env
+
+# python cache
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# notebooks
+.ipynb_checkpoints/
+
+# data & models (reproducible артефакты)
+data/raw/
+data/processed/
+models/
+mlruns/
+
+# DVC cache
+.dvc/cache/
+
+# logs / tmp
+logs/
+tmp/
+
+# docs
+*.md
