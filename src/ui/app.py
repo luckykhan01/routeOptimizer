@@ -373,7 +373,8 @@ def main() -> None:
 
     with st.sidebar:
         st.header("Settings")
-        api_url = st.text_input("API URL", value="http://127.0.0.1:8000")
+        default_url = os.environ.get("API_URL", "http://127.0.0.1:8000")
+        api_url = st.text_input("API URL", value=default_url)
         baseline_type = st.selectbox("Baseline type", ["ml", "constant", "median"], index=0)
         num_vehicles = st.slider("Number of vehicles", min_value=1, max_value=10, value=3)
         use_road_paths = st.checkbox("Road-following paths (OSM)", value=True)
