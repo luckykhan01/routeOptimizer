@@ -1,11 +1,14 @@
 PYTHON ?= python
 PIP ?= pip
 
-.PHONY: setup train serve demo test clean
+.PHONY: setup generate train serve demo test clean full_demo
 
 setup:
 	$(PIP) install --upgrade pip
 	$(PIP) install -e .[dev]
+
+generate:
+	$(PYTHON) src/data/generate_data.py
 
 train:
 	$(PYTHON) src/models/train_eta.py
@@ -21,3 +24,6 @@ test:
 
 clean:
 	$(PYTHON) -c "import shutil, pathlib; [shutil.rmtree(p, ignore_errors=True) for p in ['.pytest_cache','mlruns','__pycache__','data/processed','models']]; [pathlib.Path(p).mkdir(parents=True, exist_ok=True) for p in ['data/processed','models']]"
+
+full_demo:
+	scripts\\run_demo.bat

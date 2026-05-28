@@ -1,0 +1,23 @@
+stages:
+  generate_data:
+    cmd: python src/data/generate_data.py
+    outs:
+      - data/raw/trips.csv
+      - data/raw/orders.csv
+
+  train_eta:
+    cmd: python src/models/train_eta.py --config configs/train.yaml
+    deps:
+      - src/models/train_eta.py
+      - src/features/engineering.py
+      - configs/train.yaml
+      - data/raw/trips.csv
+    outs:
+      - models/eta_lgbm.pkl
+      - models/feature_config.json
+
+  test:
+    cmd: pytest -q
+    deps:
+      - src/
+      - tests/

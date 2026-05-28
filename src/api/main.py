@@ -108,3 +108,42 @@ async def optimize(
         "routes": result.get("routes", []),
         "metrics": result.get("metrics", {}),
     }
+
+
+@app.post("/compare")
+async def compare(
+    request: Request,
+    num_vehicles: int = Form(default=3),
+    orders_file: UploadFile | None = File(default=None),
+) -> dict[str, Any]:
+    """compare VRPTW across all baseline types"""
+    from src.optimization.solver import solve_vrptw_compare
+
+    content_type = request.headers.get("content-type", "")
+    if "application/json" in content_type:
+        body = await request.json()
+        payload = OptimizePayload(**body)
+        orders_df = pd.DataFrame(payload.orders)
+        num_vehicles = payload.num_vehicles
+    elif orders_file is not None:
+        orders_df = _orders_from_upload(orders_file)
+    else:
+        raise HTTPException(status_code=400, detail="provide orders in JSON body or upload orders_file")
+
+    model_path: Path = APP_STATE["model_path"]
+    if not model_path.exists():
+        raise HTTPException(
+            status_code=503,
+            detail=f"model not found at {model_path.as_posix()}. train model first",
+        )
+
+    try:
+        results = solve_vrptw_compare(
+            orders_df=orders_df,
+            model_path=model_path,
+            num_vehicles=num_vehicles,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return results

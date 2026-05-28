@@ -23,6 +23,9 @@ Requires-Dist: geopandas==0.14.4
 Requires-Dist: folium==0.17.0
 Requires-Dist: joblib==1.4.2
 Requires-Dist: python-multipart==0.0.9
+Requires-Dist: pyarrow>=14.0.0
+Requires-Dist: fastparquet>=2024.2.0
+Requires-Dist: tqdm>=4.66.0
 Provides-Extra: dev
 Requires-Dist: pytest==8.3.3; extra == "dev"
 Requires-Dist: pytest-cov==5.0.0; extra == "dev"
@@ -31,86 +34,99 @@ Requires-Dist: mypy==1.11.2; extra == "dev"
 
 # routeOptimizer
 
-CPU-only проект для динамической маршрутизации доставки с прогнозом ETA (LightGBM) и оптимизацией VRPTW (OR-Tools).
+Система маршрутизации доставки на основе ETA прогнозирования (LightGBM) и оптимизации VRPTW (Google OR Tools)
 
-## Архитектура
+![demo](docs/demo.gif)
 
-- `src/data/`: генерация/подготовка исходных данных.
-- `src/features/`: построение признаков для ETA-модели.
-- `src/models/`: обучение и сохранение ETA-модели.
-- `src/optimization/`: расчет матрицы времени и решение VRPTW.
-- `src/api/`: FastAPI слой для инференса и оптимизации.
-- `src/ui/`: Streamlit UI для демо и визуализации маршрутов.
-- `configs/`: конфиги обучения и путей.
-- `data/`: сырые и обработанные датасеты.
-- `models/`: сериализованные модели и feature-конфиги.
+## Architecture
+
+```mermaid
+graph TD
+    DataGen["Генерация данных<br/><code>src/data/generate_data.py</code>"] --> FeatEng["Feature Engineering<br/><code>src/features/engineering.py</code>"]
+    FeatEng --> ETAModel["ETA модель (LightGBM)<br/><code>src/models/train_eta.py</code>"]
+    ETAModel --> TimeMatrix["Матрица времени<br/><code>src/optimization/solver.py</code>"]
+    TimeMatrix --> Solver["VRPTW солвер (OR-Tools)<br/><code>src/optimization/solver.py</code>"]
+    Solver --> FastAPI["FastAPI<br/><code>src/api/main.py</code>"]
+    FastAPI --> Streamlit["Streamlit UI<br/><code>src/ui/app.py</code>"]
+```
+
+## Быстрый старт
+
+Запустите контейнеры с API и UI сервисами:
+
+```bash
+docker-compose up --build
+```
+
+## Как это работает
+
+**Симуляция и подготовка данных** Система строит дорожную сеть на основе геоданных OSMnx, генерирует синтетические заказы и поездки с временными окнами и ограничениями по объему груза. Feature Engineering преобразует координаты, рассчитывает haversine-расстояние и кодирует циклические временные признаки для оценки длительности движения.
+
+**Прогнозирование ETA (Estimated Time of Arrival)** На подготовленных признаках обучается модель градиентного бустинга LightGBM, предсказывающая время проезда сегментов дорожной сети с учетом времени суток и дня недели. Полученные прогнозы агрегируются в динамическую матрицу временных затрат между всеми точками доставки.
+
+**Оптимизация маршрутов.** На основе предсказанной матрицы времени и ограничений по грузоподъемности курьеров и временным окнам заказов (VRPTW) солвер Google OR-Tools строит оптимальные маршруты, минимизируя суммарное время в пути. Доступен через FastAPI и Streamlit.
+
+## Результаты
+
+| baseline_type | MAE | total_time_sec | served_orders |
+| :--- | :--- | :--- | :--- |
+| Constant Speed (Baseline) | — | [TBD]* | [TBD]* |
+| ML ETA (LightGBM) + OR-Tools | [TBD]* | [TBD]* | [TBD]* |
+
+\* запусти `scripts/run_demo.bat` для воспроизведения
 
 ## Структура проекта
 
+<details>
+<summary>структура проекта</summary>
+
 ```text
-routeOptimizer/
-├── data/raw/          # trips.csv, orders.csv
-├── data/processed/    # features, splits
-├── models/            # eta_lgbm.pkl, feature_config.json
-├── src/data/          # generate_data.py, preprocessing.py
-├── src/features/      # engineering.py
-├── src/models/        # train_eta.py
-├── src/optimization/  # solver.py
-├── src/api/           # main.py
-├── src/ui/            # app.py
-├── tests/             # test_*.py
-├── configs/           # train.yaml
-├── Makefile
-└── README.md
+.
+├── configs/          # конфигурационные файлы обучения
+├── data/             # сырые и обработанные данные
+├── models/           # сохраненные обученные модели
+├── scripts/          # скрипты запуска
+├── src/              # исходный код приложения
+│   ├── api/          # FastAPI
+│   ├── data/         # модули генерации данных
+│   ├── features/     # проектирование признаков
+│   ├── models/       # обучение ETA через LightGBM
+│   ├── optimization/ # решатель OR-Tools VRPTW
+│   └── ui/           # Streamlit
+└── tests/            # тесты производительности и корректности
 ```
 
-## Требования
+## Стек технологий
 
+Python, LightGBM, Google OR-Tools, FastAPI, Streamlit, MLflow, DVC, Pytest
+
+</details>
+
+## Настройка для разработки
+
+<details>
+<summary>инструкция по настройке</summary>
+
+### Требования
 - Python 3.10+
-- CPU-only окружение
-- `make` (GNU Make)
 
-## Установка зависимостей
+### Установка
 
+1. клонирование:
 ```bash
-pip install --upgrade pip
-pip install -e .[dev]
+git clone https://github.com/luckykhan01/routeOptimizer.git
+cd routeOptimizer
 ```
 
-Или через make:
-
+2. зависимости и пакет в режиме разработки:
 ```bash
 make setup
 ```
 
-## Базовые команды
+3. тесты для проверки корректности:
+```bash
+make test
+```
 
-- `make setup` — установить зависимости проекта.
-- `make train` — запустить обучение ETA-модели (будет реализовано в следующих фазах).
-- `make serve` — запустить FastAPI API (будет реализовано в следующих фазах).
-- `make demo` — запустить Streamlit UI (будет реализовано в следующих фазах).
-- `make test` — запустить тесты.
-- `make clean` — очистить кэш/артефакты и подготовить пустые `data/processed`, `models`.
+</details>
 
-## Конфиг обучения
-
-Основной конфиг: `configs/train.yaml`
-
-- `n_jobs: 6`
-- `lightgbm.device: cpu`
-- пути данных/моделей/MLflow артефактов
-- seed и гиперпараметры модели
-
-## Чеклист готовности
-
-- [x] Создана структура директорий.
-- [x] Добавлен `pyproject.toml` с фиксированными версиями зависимостей.
-- [x] Добавлен `Makefile` с базовыми командами.
-- [x] Добавлен `configs/train.yaml` для CPU-only обучения.
-- [x] Добавлен стартовый набор тестов-заглушек.
-- [ ] Реализована генерация данных.
-- [ ] Реализован feature engineering.
-- [ ] Реализовано обучение модели и логирование в MLflow.
-- [ ] Реализован OR-Tools solver.
-- [ ] Реализованы API и UI.
-- [ ] Добавлен DVC pipeline и финальная MLOps-обвязка.

@@ -55,27 +55,6 @@ def _extract_temporal_context(frame: pd.DataFrame) -> tuple[int, int]:
     return 12, 2
 
 
-def _pair_features(frame: pd.DataFrame, i: int, j: int, hour: int, weekday: int) -> dict[str, float]:
-    p1 = frame.iloc[i]
-    p2 = frame.iloc[j]
-    dist = haversine(
-        pd.Series([p1["lat"]]),
-        pd.Series([p1["lon"]]),
-        pd.Series([p2["lat"]]),
-        pd.Series([p2["lon"]]),
-    ).iloc[0]
-    cyc = encode_time_cyclical(pd.Series([hour]))
-    return {
-        "distance_m": float(dist),
-        "haversine_m": float(dist),
-        "pickup_hour": float(hour),
-        "pickup_weekday": float(weekday),
-        "is_weekend": float(1 if weekday >= 5 else 0),
-        "hour_sin": float(cyc["hour_sin"].iloc[0]),
-        "hour_cos": float(cyc["hour_cos"].iloc[0]),
-    }
-
-
 def build_time_matrix(
     orders_df: pd.DataFrame,
     model_path: str | Path,
@@ -88,6 +67,9 @@ def build_time_matrix(
     frame = _ensure_depot(orders_df)
     n = len(frame)
     matrix = np.zeros((n, n), dtype=np.int64)
+    if n <= 1:
+        return matrix
+
     hour, weekday = _extract_temporal_context(frame)
 
     model = None
@@ -100,26 +82,39 @@ def build_time_matrix(
             payload = json.loads(feature_cfg.read_text(encoding="utf-8"))
             feature_names = list(payload.get("feature_names", []))
 
-    for i in range(n):
-        for j in range(n):
-            if i == j:
-                continue
-            feats = _pair_features(frame, i, j, hour=hour, weekday=weekday)
+    # Vectorized pair generation
+    i_idx, j_idx = np.where(~np.eye(n, dtype=bool))
+    
+    lat1 = frame["lat"].iloc[i_idx].reset_index(drop=True)
+    lon1 = frame["lon"].iloc[i_idx].reset_index(drop=True)
+    lat2 = frame["lat"].iloc[j_idx].reset_index(drop=True)
+    lon2 = frame["lon"].iloc[j_idx].reset_index(drop=True)
+    
+    dist = haversine(lat1, lon1, lat2, lon2)
+    
+    if baseline_type == "constant":
+        etas = dist / 7.0
+    elif baseline_type == "median":
+        etas = dist / 6.0
+    elif baseline_type == "ml":
+        cyc = encode_time_cyclical(pd.Series([hour] * len(dist)))
+        feats = pd.DataFrame({
+            "distance_m": dist,
+            "haversine_m": dist,
+            "pickup_hour": float(hour),
+            "pickup_weekday": float(weekday),
+            "is_weekend": float(1 if weekday >= 5 else 0),
+            "hour_sin": cyc["hour_sin"].values,
+            "hour_cos": cyc["hour_cos"].values,
+        })
+        if feature_names:
+            feats = feats.reindex(columns=feature_names, fill_value=0.0)
+        etas = model.predict(feats)
+    else:
+        raise ValueError("baseline_type must be one of: constant, median, ml")
 
-            if baseline_type == "constant":
-                eta = feats["distance_m"] / 7.0
-            elif baseline_type == "median":
-                eta = feats["distance_m"] / 6.0
-            elif baseline_type == "ml":
-                x = pd.DataFrame([feats])
-                if feature_names:
-                    x = x.reindex(columns=feature_names, fill_value=0.0)
-                eta = float(model.predict(x)[0])
-            else:
-                raise ValueError("baseline_type must be one of: constant, median, ml")
-
-            eta = max(1.0, eta)
-            matrix[i, j] = int(round(eta))
+    etas = np.maximum(1.0, etas)
+    matrix[i_idx, j_idx] = np.round(etas).astype(np.int64)
     return matrix
 
 
@@ -128,7 +123,11 @@ def solve_vrptw(
     orders_df: pd.DataFrame,
     num_vehicles: int = 3,
 ) -> dict[str, Any]:
-    """solve VRPTW and return parsed routes with metrics"""
+    """solve VRPTW and return parsed routes with metrics.
+
+    uses AddDisjunction to allow dropping orders that can't fit,
+    returning partial solutions instead of no_solution.
+    """
     frame = _ensure_depot(orders_df)
     if time_matrix.shape != (len(frame), len(frame)):
         raise ValueError("time_matrix shape does not match orders_df size (after depot handling).")
@@ -142,79 +141,81 @@ def solve_vrptw(
     )
     service = frame.get("service_time_min", pd.Series([0] * len(frame))).fillna(0).astype(int).to_numpy()
     demand = frame.get("demand", pd.Series([0] * len(frame))).fillna(0).astype(int).to_numpy()
-    due[0] = max(due[0], int(due.max()))
 
-    solve_mode = "strict"
-    solution = None
-    manager: pywrapcp.RoutingIndexManager | None = None
-    routing: pywrapcp.RoutingModel | None = None
-    time_dimension = None
+    # relax time windows: add buffer to due times so the solver has room
+    window_buffer_min = 120
+    due_adj = np.maximum(due, ready + 1) + window_buffer_min
+    due_adj[0] = max(due_adj[0], int(due_adj.max()) + 60)
 
-    for window_buffer_min in (0, 120, 360):
-        due_adj = np.maximum(due, ready + 1) + window_buffer_min
-        due_adj[0] = max(due_adj[0], int(due_adj.max()))
+    manager = pywrapcp.RoutingIndexManager(len(frame), num_vehicles, 0)
+    routing = pywrapcp.RoutingModel(manager)
 
-        manager = pywrapcp.RoutingIndexManager(len(frame), num_vehicles, 0)
-        routing = pywrapcp.RoutingModel(manager)
+    def time_cb(from_index: int, to_index: int) -> int:
+        from_node = manager.IndexToNode(from_index)
+        to_node = manager.IndexToNode(to_index)
+        return int(time_matrix[from_node, to_node] + service[from_node] * 60)
 
-        def time_cb(from_index: int, to_index: int) -> int:
-            from_node = manager.IndexToNode(from_index)
-            to_node = manager.IndexToNode(to_index)
-            return int(time_matrix[from_node, to_node] + service[from_node] * 60)
+    transit_callback_idx = routing.RegisterTransitCallback(time_cb)
+    routing.SetArcCostEvaluatorOfAllVehicles(transit_callback_idx)
 
-        transit_callback_idx = routing.RegisterTransitCallback(time_cb)
-        routing.SetArcCostEvaluatorOfAllVehicles(transit_callback_idx)
+    def demand_cb(from_index: int) -> int:
+        return int(demand[manager.IndexToNode(from_index)])
 
-        def demand_cb(from_index: int) -> int:
-            return int(demand[manager.IndexToNode(from_index)])
+    demand_callback_idx = routing.RegisterUnaryTransitCallback(demand_cb)
+    capacity = max(10, int(np.ceil(demand.sum() / max(1, num_vehicles) * 2.0)))
+    routing.AddDimensionWithVehicleCapacity(
+        demand_callback_idx,
+        0,
+        [capacity] * num_vehicles,
+        True,
+        "Capacity",
+    )
 
-        demand_callback_idx = routing.RegisterUnaryTransitCallback(demand_cb)
-        capacity = max(10, int(np.ceil(demand.sum() / max(1, num_vehicles) * 1.25)))
-        routing.AddDimensionWithVehicleCapacity(
-            demand_callback_idx,
-            0,
-            [capacity] * num_vehicles,
-            True,
-            "Capacity",
-        )
+    horizon = int(max(due_adj.max(), 24 * 60) * 60)
+    slack = 4 * 3600  # 4 hours slack for waiting
+    routing.AddDimension(
+        transit_callback_idx,
+        slack,
+        horizon,
+        False,
+        "Time",
+    )
+    time_dimension = routing.GetDimensionOrDie("Time")
 
-        horizon = int(max(due_adj.max(), 24 * 60) * 60)
-        routing.AddDimension(
-            transit_callback_idx,
-            60 * 60,
-            horizon,
-            False,
-            "Time",
-        )
-        time_dimension = routing.GetDimensionOrDie("Time")
+    for node in range(len(frame)):
+        idx = manager.NodeToIndex(node)
+        time_dimension.CumulVar(idx).SetRange(int(ready[node] * 60), int(due_adj[node] * 60))
 
-        for node in range(len(frame)):
-            idx = manager.NodeToIndex(node)
-            time_dimension.CumulVar(idx).SetRange(int(ready[node] * 60), int(due_adj[node] * 60))
+    for vehicle_id in range(num_vehicles):
+        start_idx = routing.Start(vehicle_id)
+        end_idx = routing.End(vehicle_id)
+        time_dimension.CumulVar(start_idx).SetRange(0, int(due_adj[0] * 60))
+        time_dimension.CumulVar(end_idx).SetRange(0, horizon)
 
-        for vehicle_id in range(num_vehicles):
-            start_idx = routing.Start(vehicle_id)
-            end_idx = routing.End(vehicle_id)
-            time_dimension.CumulVar(start_idx).SetRange(int(ready[0] * 60), int(due_adj[0] * 60))
-            time_dimension.CumulVar(end_idx).SetRange(0, horizon)
+    # allow dropping any order node (not depot) with a high penalty
+    # this ensures we always get a solution — the solver drops orders it can't fit
+    drop_penalty = int(time_matrix.max() * 10)
+    for node in range(1, len(frame)):
+        routing.AddDisjunction([manager.NodeToIndex(node)], drop_penalty)
 
-        search = pywrapcp.DefaultRoutingSearchParameters()
-        search.first_solution_strategy = routing_enums_pb2.FirstSolutionStrategy.PATH_CHEAPEST_ARC
-        search.local_search_metaheuristic = routing_enums_pb2.LocalSearchMetaheuristic.GUIDED_LOCAL_SEARCH
-        search.time_limit.seconds = 10
+    search = pywrapcp.DefaultRoutingSearchParameters()
+    search.first_solution_strategy = routing_enums_pb2.FirstSolutionStrategy.PATH_CHEAPEST_ARC
+    search.local_search_metaheuristic = routing_enums_pb2.LocalSearchMetaheuristic.GUIDED_LOCAL_SEARCH
+    search.time_limit.seconds = 15
 
-        solution = routing.SolveWithParameters(search)
-        if solution is not None:
-            solve_mode = "strict" if window_buffer_min == 0 else f"relaxed_plus_{window_buffer_min}m"
-            break
+    solution = routing.SolveWithParameters(search)
 
-    if solution is None or manager is None or routing is None or time_dimension is None:
+    if solution is None:
         return {"status": "no_solution", "routes": [], "metrics": {}}
 
     routes: list[dict[str, Any]] = []
     total_time = 0
     total_load = 0
     served_orders = 0
+    dropped_orders: list[int] = []
+
+    # collect served node ids to find dropped ones
+    served_nodes: set[int] = set()
 
     for vehicle_id in range(num_vehicles):
         index = routing.Start(vehicle_id)
@@ -227,6 +228,7 @@ def solve_vrptw(
             route_load += int(demand[node])
             if node != 0:
                 served_orders += 1
+                served_nodes.add(node)
             stops.append(
                 {
                     "node": int(node),
@@ -264,6 +266,12 @@ def solve_vrptw(
             }
         )
 
+    # identify dropped orders
+    for node in range(1, len(frame)):
+        if node not in served_nodes:
+            dropped_orders.append(int(frame.iloc[node].get("order_id", node)))
+
+    total_orders = len(frame) - 1  # exclude depot
     return {
         "status": "solved",
         "routes": routes,
@@ -271,7 +279,31 @@ def solve_vrptw(
             "total_time_sec": int(total_time),
             "total_load": int(total_load),
             "served_orders": int(served_orders),
+            "total_orders": int(total_orders),
+            "dropped_orders": len(dropped_orders),
+            "dropped_order_ids": dropped_orders,
             "num_routes": int(len(routes)),
-            "solve_mode": solve_mode,
         },
     }
+
+
+def solve_vrptw_compare(
+    orders_df: pd.DataFrame,
+    model_path: str | Path,
+    num_vehicles: int = 3,
+) -> dict[str, Any]:
+    """run solver with all three baseline types and return comparative metrics"""
+    results: dict[str, Any] = {}
+    for baseline_type in ("ml", "constant", "median"):
+        tm = build_time_matrix(
+            orders_df=orders_df,
+            model_path=model_path,
+            baseline_type=baseline_type,
+        )
+        sol = solve_vrptw(time_matrix=tm, orders_df=orders_df, num_vehicles=num_vehicles)
+        results[baseline_type] = {
+            "status": sol["status"],
+            "metrics": sol.get("metrics", {}),
+        }
+    return results
+
