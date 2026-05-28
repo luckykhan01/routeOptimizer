@@ -30,7 +30,4 @@ mlruns/
 logs/
 tmp/
 
-# docs
-*.md
-
 mlflow.db
