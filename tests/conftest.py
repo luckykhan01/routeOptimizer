@@ -1,4 +1,4 @@
-"""Pytest configuration for local import resolution."""
+"""pytest configuration for local import resolution"""
 
 from __future__ import annotations
 

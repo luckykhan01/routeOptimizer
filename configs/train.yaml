@@ -8,7 +8,7 @@ paths:
   model_dir: models
   model_path: models/eta_lgbm.pkl
   feature_config_path: models/feature_config.json
-  mlflow_tracking_uri: mlruns
+  mlflow_tracking_uri: sqlite:///mlflow.db
   mlflow_experiment: routeOptimizer-eta
 
 lightgbm:
