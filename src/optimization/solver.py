@@ -122,6 +122,7 @@ def solve_vrptw(
     time_matrix: np.ndarray,
     orders_df: pd.DataFrame,
     num_vehicles: int = 3,
+    search_strategy: str = "gls",
 ) -> dict[str, Any]:
     """solve VRPTW and return parsed routes with metrics.
 
@@ -200,8 +201,15 @@ def solve_vrptw(
 
     search = pywrapcp.DefaultRoutingSearchParameters()
     search.first_solution_strategy = routing_enums_pb2.FirstSolutionStrategy.PATH_CHEAPEST_ARC
-    search.local_search_metaheuristic = routing_enums_pb2.LocalSearchMetaheuristic.GUIDED_LOCAL_SEARCH
-    search.time_limit.seconds = 15
+    
+    if search_strategy == "gls":
+        search.local_search_metaheuristic = routing_enums_pb2.LocalSearchMetaheuristic.GUIDED_LOCAL_SEARCH
+        search.time_limit.seconds = 15
+    elif search_strategy == "greedy":
+        # FirstSolutionStrategy runs and then returns immediately without Local Search
+        pass
+    else:
+        raise ValueError("search_strategy must be 'gls' or 'greedy'")
 
     solution = routing.SolveWithParameters(search)
 
@@ -300,10 +308,23 @@ def solve_vrptw_compare(
             model_path=model_path,
             baseline_type=baseline_type,
         )
-        sol = solve_vrptw(time_matrix=tm, orders_df=orders_df, num_vehicles=num_vehicles)
+        sol = solve_vrptw(time_matrix=tm, orders_df=orders_df, num_vehicles=num_vehicles, search_strategy="gls")
         results[baseline_type] = {
             "status": sol["status"],
             "metrics": sol.get("metrics", {}),
         }
+
+    # greedy comparison using ML matrix
+    tm_ml = build_time_matrix(
+        orders_df=orders_df,
+        model_path=model_path,
+        baseline_type="ml",
+    )
+    sol_greedy = solve_vrptw(time_matrix=tm_ml, orders_df=orders_df, num_vehicles=num_vehicles, search_strategy="greedy")
+    results["ml_greedy"] = {
+        "status": sol_greedy["status"],
+        "metrics": sol_greedy.get("metrics", {}),
+    }
+
     return results
 
